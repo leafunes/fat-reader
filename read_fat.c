@@ -13,6 +13,17 @@ unsigned int get_addr_of_file(unsigned int addr_data, Fat12Entry* entry, Fat12Bo
     return get_addr_of_cluster(addr_data, entry->first_cluster, boot_sector);
 }
 
+void undelete(Fat12Entry* entry, unsigned int entry_addr, FILE* file){
+    long current_dir = ftell(file);
+    fseek(file, entry_addr, SEEK_SET);
+    printf("written: %u\n", fputc('X', file));
+    fflush(file);
+    
+    fseek(file, current_dir, SEEK_SET);
+
+    entry->dos_name[0] = 'X';
+}
+
 //Lee un archivo, y lo mete en el buffer
 void read_file(unsigned char* buffer, unsigned int addr_data, Fat12Entry* entry, Fat12BootSector* boot_sector, unsigned short* FAT, FILE* file){
 
@@ -26,7 +37,6 @@ void read_file(unsigned char* buffer, unsigned int addr_data, Fat12Entry* entry,
     fread(buffer, sizeof(unsigned char), bytes_to_read, file);
 
     while(cluster < 0xFF8 && cluster != 0){
-
         total_bytes -= bytes_to_read;
         bytes_readed += bytes_to_read;
         bytes_to_read = MIN(total_bytes, boot_sector->sector_per_cluster * boot_sector->bytes_per_sector);
@@ -56,7 +66,8 @@ void print_all_files(unsigned int addr, unsigned int addr_data, unsigned int max
 
     for(int i=0; i < max_entries; i++) {
         //Si es un entry especial, lo ignoro
-        if(entries[i].attr == 0x0 || entries[i].attr == 0x0F)
+        //Parece que FAT usa directorios especiales, como "."" y ".."" -> esos no hay que leerlos
+        if(entries[i].attr == 0x0 || entries[i].attr == 0x0F || entries[i].dos_name[0] == 0x2E)
             continue;
 
         printf("%s", level_str);
@@ -64,13 +75,10 @@ void print_all_files(unsigned int addr, unsigned int addr_data, unsigned int max
         //Si es un directorio, leo las cosas de adentro
         if(entries[i].attr == 0x10){
             printf("[%s%s]\n",entries[i].dos_name, entries[i].dos_ext);
-            //Parece que FAT usa directorios especiales, como "."" y ".."" -> esos no hay que leerlos
-            if(entries[i].first_cluster != 0){
-                unsigned int next_add = get_addr_of_file(addr_data, &entries[i], boot_sector);
-                unsigned int next_max_entries = boot_sector->bytes_per_sector / 32;
-                if(next_add != addr)
-                    print_all_files(next_add, addr_data, next_max_entries, level + 1, boot_sector, file);
-            }
+            unsigned int next_add = get_addr_of_file(addr_data, &entries[i], boot_sector);
+            unsigned int next_max_entries = boot_sector->bytes_per_sector / 32;
+            print_all_files(next_add, addr_data, next_max_entries, level + 1, boot_sector, file);
+            
         }
         //Si es un file comun, imprimo el nombre
         else if(entries[i].attr == 0x20){
@@ -94,33 +102,41 @@ char* find_and_restore(unsigned int addr, unsigned int addr_data, unsigned int m
 
     for(int i=0; i < max_entries; i++) {
         //Si es un entry especial, lo ignoro
-        if(entries[i].attr == 0x0 || entries[i].attr == 0x0F)
+        //Parece que FAT usa directorios especiales, como "."" y ".."" -> esos no hay que leerlos
+        if(entries[i].attr == 0x0 || entries[i].attr == 0x0F || entries[i].dos_name[0] == 0x2E)
             continue;
 
         //Si es un directorio, leo las cosas de adentro
         if(entries[i].attr == 0x10){
             //Parece que FAT usa directorios especiales, como "."" y ".."" -> esos no hay que leerlos
-            if(entries[i].first_cluster != 0){
-                unsigned int next_add = get_addr_of_file(addr_data, &entries[i], boot_sector);
-                unsigned int next_max_entries = boot_sector->bytes_per_sector / 32;
-                if(next_add != addr)
-                    find_and_restore(next_add, addr_data, next_max_entries, FAT, fat_size, boot_sector, file, partial_content);
-            }
+            unsigned int next_add = get_addr_of_file(addr_data, &entries[i], boot_sector);
+            unsigned int next_max_entries = boot_sector->bytes_per_sector / 32;
+            find_and_restore(next_add, addr_data, next_max_entries, FAT, fat_size, boot_sector, file, partial_content);
         }
         //Si es un file comun, lo cargo en memoria, y busco el 
         else if(entries[i].attr == 0x20){
-            if(entries[i].dos_name[0] != 0xE5 && entries[i].filesize != 0){
+            if(entries[i].filesize != 0){
 
                 //Se inicializa en cero
                 unsigned int size = entries[i].filesize;
                 unsigned char* buffer = calloc(size, sizeof(unsigned char));
 
                 read_file(buffer, addr_data, &entries[i], boot_sector, FAT, file);
+                
+                if(strstr(buffer, partial_content) != NULL){
+                    
+                    printf("\n------ Content of %.8s.%.3s -----\n", entries[i].dos_name, entries[i].dos_ext);
+                    printf("%s", buffer);
+                    printf("\n------- End of Content ---------\n");
+                    if(entries[i].dos_name[0] == 0xE5){
+                        undelete(&entries[i], addr + (i * 32), file);
+                        printf("Was deleted\n");
+                        printf("Restored as %.8s.%.3s\n", entries[i].dos_name, entries[i].dos_ext);
+                    }
 
-                printf("Content of %.8s.%.3s\n", entries[i].dos_name, entries[i].dos_ext);
-                printf("%s", buffer);
+                }
 
-                //free(buffer);
+                free(buffer);
             }
             
         }
@@ -129,7 +145,7 @@ char* find_and_restore(unsigned int addr, unsigned int addr_data, unsigned int m
 }
 
 int main(){
-    FILE * iso = fopen("test.img", "rb");
+    FILE * iso = fopen("more_files.img", "r+b");
     int first_fat12_partition;
     PartitionTable partition_table[4]; 
     Fat12BootSector boot_sector;
@@ -198,7 +214,7 @@ int main(){
         fread(&mid, 1, 1, iso);
         fread(&high, 1, 1, iso);
 
-        unsigned short first = (low << 4) + (mid & 0x0F);
+        unsigned short first = ((mid & 0x0F) << 8) + low;
         unsigned short second = (high << 4) + ((mid & 0xF0) >> 4);
 
         FAT[i] = first;
@@ -220,7 +236,7 @@ int main(){
     //Empiezo a leer los archivos
     printf("-------List Files-------\n");
     print_all_files(addr_root_dir, addr_data_reg, boot_sector.max_root_entries, 0, &boot_sector, iso);
-    find_and_restore(addr_root_dir, addr_data_reg, boot_sector.max_root_entries, &FAT, fat12_entries, &boot_sector, iso, "");
+    find_and_restore(addr_root_dir, addr_data_reg, boot_sector.max_root_entries, &FAT, fat12_entries, &boot_sector, iso, "lorem");
     
     return 0;
 

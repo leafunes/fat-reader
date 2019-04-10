@@ -16,7 +16,6 @@ unsigned int get_addr_of_file(unsigned int addr_data, Fat12Entry* entry, Fat12Bo
 void undelete(Fat12Entry* entry, unsigned int entry_addr, FILE* file){
     long current_dir = ftell(file);
     fseek(file, entry_addr, SEEK_SET);
-    printf("written: %u\n", fputc('X', file));
     fflush(file);
     
     fseek(file, current_dir, SEEK_SET);
@@ -238,6 +237,8 @@ int main(){
     print_all_files(addr_root_dir, addr_data_reg, boot_sector.max_root_entries, 0, &boot_sector, iso);
     find_and_restore(addr_root_dir, addr_data_reg, boot_sector.max_root_entries, &FAT, fat12_entries, &boot_sector, iso, "lorem");
     
+    fclose(iso);
+
     return 0;
 
 }

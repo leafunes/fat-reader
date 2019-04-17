@@ -73,7 +73,7 @@ void print_all_files(unsigned int addr, unsigned int addr_data, unsigned int max
 
         //Si es un directorio, leo las cosas de adentro
         if(entries[i].attr == 0x10){
-            printf("[%s%s]\n",entries[i].dos_name, entries[i].dos_ext);
+            printf("[%.8s.%.3s]\n",entries[i].dos_name, entries[i].dos_ext);
             unsigned int next_add = get_addr_of_file(addr_data, &entries[i], boot_sector);
             unsigned int next_max_entries = boot_sector->bytes_per_sector / 32;
             print_all_files(next_add, addr_data, next_max_entries, level + 1, boot_sector, file);

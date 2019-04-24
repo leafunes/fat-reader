@@ -9,3 +9,4 @@ clean:
 all: 
 	mkdir -p bin
 	gcc read_fat.c -o ./bin/read_fat
+	gcc read_mbr.c -o ./bin/read_mbr
